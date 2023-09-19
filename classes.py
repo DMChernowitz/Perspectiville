@@ -18,12 +18,18 @@ class Poly:
             orientation: str = None,
             merges: bool = False,
             camera_ratio: np.array = camera_ratio,
-            proj_array: np.array = proj_array
+            proj_array: np.array = proj_array,
+            holes: list = None,
     ):
+        if not type(coords) == np.array:
+            coords = np.array(coords)
         self.coords = coords
         self.color_group = color_group  # 0: path, 1: window, 2: roof, 3+: buildings
         self.orientation = orientation  # top, side, front, slant_{i}
         self.merges = merges
+        if holes is None:
+            holes = []
+        self.holes = [h if type(h) == np.array else np.array(h) for h in holes]
 
         # internal variables:
         # self._edges = None
@@ -32,10 +38,11 @@ class Poly:
         self._camera_ratio = camera_ratio
         self._min_max_from_view = None
         self._projection = None
-        self.proj_array = proj_array
+        self._proj_array = proj_array
         self._flat_shapely = None
         self._camera_side = None
         self._mm_uv = None
+        self._hole_projections = None
 
     def distance_to_plane(self, _co):
         return -(self.d_const + _co.dot(self.normal_vec)) / self.normal_vec.dot(self.camera_ratio)
@@ -64,26 +71,40 @@ class Poly:
                 #remove those from original.
             else:
                 print("Shouldn't be cutting this")
-        mor = mapping(original)
-        if mor["type"] == "Polygon":
-            return [np.array(u[:-1]) for u in mor["coordinates"]]
-        else:
-            return [np.array(u[0])[:-1] for u in mor["coordinates"]]
+
+        if hasattr(original,"geoms"):
+            return list(original.geoms)
+        return [original]
+        # mor = mapping(original)
+        # if mor["type"] == "Polygon":
+        #     return [np.array(u[:-1]) for u in mor["coordinates"]]
+        # else:
+        #     return [np.array(u[0])[:-1] for u in mor["coordinates"]]
 
     @property
     def projection(self):
         if self._projection is None:
-            if self.proj_array is None:
-                pers_x = -self._camera_ratio[0] / self._camera_ratio[1]
-                pers_z = -self._camera_ratio[2] / self._camera_ratio[1]
-                self.proj_array = np.array([[1., 0.], [pers_x, pers_z], [0., 1.]])
             self._projection = self.coords.dot(self.proj_array)
         return self._projection
 
     @property
+    def proj_array(self):
+        if self._proj_array is None:
+            pers_x = -self._camera_ratio[0] / self._camera_ratio[1]
+            pers_z = -self._camera_ratio[2] / self._camera_ratio[1]
+            self._proj_array = np.array([[1., 0.], [pers_x, pers_z], [0., 1.]])
+        return self._proj_array
+
+    @property
+    def hole_projections(self):
+        if self._hole_projections is None:
+            self._hole_projections = [hole.dot(self.proj_array) for hole in self.holes]
+        return self._hole_projections
+
+    @property
     def flat_shapely(self) -> Polygon:
         if self._flat_shapely is None:
-            self._flat_shapely = Polygon(self.projection)
+            self._flat_shapely = Polygon(self.projection, holes = self.hole_projections)
         return self._flat_shapely
 
     @property
@@ -134,11 +155,12 @@ class Poly:
     def camera_ratio(self, new_ratio):
         self._camera_ratio = new_ratio
         self._min_max_from_view = None
-        self.proj_array = None
+        self._proj_array = None
         self._projection = None
         self._camera_side = None
         self._mm_uv = None
         self._flat_shapely = None
+        self._hole_projections = None
 
 
     @property

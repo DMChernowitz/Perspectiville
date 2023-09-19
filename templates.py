@@ -203,37 +203,7 @@ cube_filling_building[8].append(
 )
 
 
-def get_poly_colors():
-    modulator = {
-        "front": 0.7,
-        "side": 0.5,
-        "top": 0.9
-    }
-    color_group_bases = {
-        0: np.array([0, 0, 1]),  # path is blue
-        1: np.array([1, 1, 0]),  # windows are yellow
-        2: np.array([1, 0, 0]),  # roof is red
-        3: np.array([0, 1, 0]),  # target is green
-        4: np.array([1, 1, 1]),  # buildings are rgay
-        5: np.array([0.7, 0.7, 0.7]),  # buildings are rgay
-        6: np.array([0.4, 0.4, 0.4]),  # buildings are rgay
-        # "top": (0.8,0,0),
-        # "front": (0.65,0,0),
-        # "side": (0.4,0,0),
-        # "mtop2": (0.8,0,0),
-        # "mtop": (0.8,0.8,0.8),
-        # "mfront": (0.65,0.65,0.65),
-        # "mside": (0.4,0.4,0.4),
-        # "away": 0.3,
-        # "slant": 0.7,
-        # "toward": 0.6,
-        # "skew": 0.3,
-        # "target": (0.7,0.6,0)
-    }
 
-    kron_dict = {(c,m): tuple(C*M) for c,C in color_group_bases.items() for m,M in modulator.items()}
-
-    return kron_dict
 
 def get_window(nx,ny,fx,fy):
     """
@@ -263,6 +233,34 @@ def get_window(nx,ny,fx,fy):
     lap = [(0,0),(0,1),(1,1),(1,0)]
 
     return [np.array([[px[j],py[k]] for j,k in lap]) for px in pxl for py in pyl]
+
+def get_roof_template(style, height, m):
+    polylist = []
+    if style == "slant_front":
+        topz = 50*(height+1)
+        polylist.append(Poly(
+            coords=[[0,0,0],[100,0,0],[50,0,topz]],
+            orientation="front",
+            merges=True,
+            color_group=4)
+        )
+        w = 100/(l:=2**m)
+        for j in range(l):
+            polylist.append(Poly(
+                coords=[[100,w*j,0],[100,w*(j+1),0],[50,w*(j+1),topz],[50,w*j,topz]],
+                orientation=f"slant_{height}",
+                merges=False,
+                color_group=2)
+            )
+            polylist.append(Poly(
+                coords=[[0,w*j,0],[0,w*(j+1),0],[50,w*(j+1),topz],[50,w*j,topz]],
+                orientation=f"tnals_{height}",
+                merges=False,
+                color_group=2)
+            )
+    return polylist
+
+
 
 
 #practice polygons

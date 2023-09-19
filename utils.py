@@ -4,7 +4,23 @@ from math import gcd
 from shapely.geometry import Polygon, mapping
 from shapely.ops import unary_union
 from classes import Poly
-from config import path_weights
+from config import path_weights, curvature_weights
+from matplotlib.path import Path
+from matplotlib.patches import PathPatch
+
+from shapely.geometry.polygon import orient
+
+# Plots a Polygon to pyplot `ax`
+def patch_polygon(poly, **kwargs):
+
+    opoly = orient(poly)
+    path = Path.make_compound_path(
+        Path(np.asarray(opoly.exterior.coords)[:, :2]),
+        *[Path(np.asarray(ring.coords)[:, :2]) for ring in opoly.interiors])
+
+    return PathPatch(path, **kwargs)
+
+
 
 def scan_wall(wall,j,k):
     h_ribs_front = sorted(wall, key=lambda x: (x[k], x[j]))
@@ -67,15 +83,30 @@ def join_polygons(polys: list) -> list:
     elif unified["type"] == "MultiPolygon":
         new_coords = unified["coordinates"]
 
-    return [
-        Poly(coords=np.insert(minimize_pts(u[0]), fixed_1[0], fixed_1[1], axis=1),
-             orientation=polys[0].orientation,
-             color_group=polys[0].color_group) for u in new_coords
-    ]
+
+    def restore_dim(u):
+        return np.insert(minimize_pts(u), fixed_1[0], fixed_1[1], axis=1)
+
+    merged_polys = []
+
+    for merged_coords in new_coords:
+        if len(merged_coords) > 1:
+            holes = [restore_dim(u) for u in merged_coords[1:]]
+        else:
+            holes = []
+        merged_polys.append(
+            Poly(coords=restore_dim(merged_coords[0]),
+            orientation=polys[0].orientation,
+            color_group=polys[0].color_group,
+            holes=holes)
+        )
 
 
-def choose_next_weighted(pos_data):
-    weights = [path_weights[p[1]] for p in pos_data]
+    return merged_polys
+
+
+def choose_next_weighted(s0,pos_data):
+    weights = [weight_transition(s0,p[1])*path_weights[p[1]] for p in pos_data]
     cum = np.cumsum(weights)
     needle = sum(weights)*np.random.random()
     for h in range(len(weights)):
@@ -149,6 +180,13 @@ transitions = {#can go from this direction to these
     "fu": ["f", "fu"],  # moving front and up
     "fd": ["f", "fd"],  # moving front and down
 }
+
+def weight_transition(s0,s1):
+    if s0 == s1:
+        return curvature_weights["inertia"]
+    if (s01 := s0+s1).count("u") == 1 or s01.count("d") == 1:
+        return curvature_weights["updown"]
+    return curvature_weights["corner"]
 
 transition_directions = {key: {i: np.array(directions[i]) for i in obj} for (key,obj) in transitions.items()}
 
