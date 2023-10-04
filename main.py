@@ -9,8 +9,6 @@ import matplotlib as mpl
 from matplotlib.collections import PatchCollection
 
 
-
-
 import itertools
 import copy
 
@@ -29,15 +27,17 @@ from utils import (
     cube_blocking,
     divisors,
     scan_wall,
-    patch_polygon
+    patch_polygon,
+    get_y_blocks,
+    rel_choice
 )
-from templates import cube_filling_building, cube_filling_free, get_window, get_roof_template
+from templates import cube_filling_building, cube_filling_free, get_window, get_roof_template, get_single_chimney
 from classes import Poly
 
 from config import unit_cell_paths, get_poly_colors, roof_style_probs, n_colors
 
 
-seed = 7658#np.random.randint(100000)
+seed = np.random.randint(100000)
 
 print("seed:", seed)
 
@@ -66,26 +66,62 @@ class Escherville:
         self.x_building = self.get_building_locs(self.Lx)
         self.y_building = self.get_building_locs(self.Ly)
 
-        #self.possible_starts = [(a, b, building_height) for a in self.x_building for b in self.y_building]
-
-        self.succesful_paths = None
-
         self.camera_ratio = camera_ratio
 
-        self.joined_polys = []
+        self.merged_polys = [] #have been joined
+        self.unjoined_polys = [] #need to be joined
+        self.finished_polys = [] #don't need to be joined
 
         self.polygraph = nx.DiGraph()
 
         #to store the blocks that make up each building at the end
         self.windows_hash = {n: {"side":[], "front":[]} for n in range(self.Nx*self.Ny)}
+        self.little_windows_hash = copy.deepcopy(self.windows_hash)
         #first label: building nr, second, roof loc, points to possible build height.
         self.roof_hash = {n: {} for n in range(self.Nx*self.Ny)}
 
         self.genz = self.get_path_sources_targets(unit_cell_paths)
-        self.roof_styles = {}
-        self.group_colors = []  # (.color_group,.orientation) format
-        self.polygons = []
 
+        # (.color_group,.orientation) format
+        self.group_colors = [(cg,ori) for cg in [0]+list(range(4,4+n_colors)) for ori in ["front","side","top"]]
+
+        #how often to try to plot a path
+        self.n_path_attempts = 10000
+
+        self.building_colors = None
+        self.task_stack = []
+        self.freeze_joined = False
+
+    def queue_poly(self,poly):
+        if poly.merges:
+            self.unjoined_polys.append(poly)
+        else:
+            self.finished_polys.append(poly)
+
+    def get_task_stack(self):
+        #each task has a name (method name), args to input to the method, and a bool, whether to plot after.
+
+        self.task_stack.append({"task": "set_building_colors", "args": [], "plot": True})
+
+
+        for path_nr in range(len(self.genz)):
+            self.task_stack.append({"task": "add_one_escher_path", "args": [path_nr], "plot": True})
+
+        self.task_stack.append({"task": "scope_roofs", "args": [], "plot": False})
+
+        for cluster_nr in range(self.Nx*self.Ny):
+            self.task_stack.append({"task": "roofer", "args": [cluster_nr], "plot": True})
+
+        #from this step, can keep the joined_polys. i.e. add to scope_walls a flag: freeze joined..
+        self.task_stack.append({"task": "scope_walls", "args": [], "plot": False})
+
+        for cluster_nr in range(self.Nx*self.Ny):
+            self.task_stack.append({"task": "stretch_windows", "args": [cluster_nr], "plot": True})
+
+        self.task_stack.append({"task": "set_poly_colors", "args": [], "plot": True})
+
+
+    def set_building_colors(self):
         self.building_colors = np.random.randint(4, n_colors + 4, self.Nx*self.Ny)
 
     def get_path_sources_targets(self,unit_cell):
@@ -130,47 +166,116 @@ class Escherville:
                 if self.airspace[target_indices] in can_start_path:
                     yield source_indices,target_indices
 
-
     def get_building_locs(self,L):
         return sorted(sum([list(range(self.hbp // 2 + d + 1,L,self.building_period)) for d in range(self.hbp)], []))
 
     def get_cluster(self,ix,iy):
         return ((ix-1)//self.building_period)*self.Ny+(iy-1)//self.building_period
 
-    def scope_walls_roofs(self):
-        ly = self.hbp//2 + 1
-        lx = ly+self.hbp-1
+    def scope_roofs(self):
         for ix, iy, iz in self.all_xyz():
-            if self.airspace[ix,iy,iz] in [2,11]: #building body
-                cur_cluster = self.get_cluster(ix, iy)
-                if self.airspace[ix,iy-1,iz] in [0,3,7,9] and (iz >= self.building_height or (iy % self.building_period == ly)): # visible front
-                    self.windows_hash[cur_cluster]["front"].append((ix,iy,iz))
-                if self.airspace[ix+1,iy,iz] in [0,3,6,9] and (iz >= self.building_height or (ix % self.building_period == lx)): #visible side
-                    self.windows_hash[cur_cluster]["side"].append((ix,iy,iz))
-            if self.airspace[ix,iy,iz] in [1,10]: #building roof:
+            pos = (ix,iy,iz)
+            cur_cluster = self.get_cluster(ix, iy)
+            if self.airspace[pos] in [1,10]: #building roof:
                 for dz in range(1,self.Lz-iz+1):
                     if self.airspace[ix,iy,iz+dz] not in [0,9]:
                         break
-                self.roof_hash[self.get_cluster(ix, iy)][(ix,iy,iz)] = dz
+                self.roof_hash[cur_cluster][pos] = dz
+            if self.airspace[pos] in [4]: #target #could add 13 to free up start of path here
+                self.roof_hash[cur_cluster][pos] = -1
 
+    def roofer(self, cluster_nr):
         #choose roof styles
-        full_roof = self.hbp*self.hbp
-        for cluster_nr in range(self.Nx*self.Ny):
-            if len(self.roof_hash[cluster_nr]) == full_roof and np.random.randint(2):
-                displace = 100*np.array(list(self.roof_hash[cluster_nr])).min(axis=0)
-                for key in self.roof_hash[cluster_nr]:
-                    self.roof_styles[key] = "slant_front"
-                max_height = max([v for v in self.roof_hash[cluster_nr].values()])
-                roof_height = np.random.randint(max_height*2)
-                droof = np.array([[self.hbp,self.hbp,1]])
-                for _roof_poly in get_roof_template("slant_front", height=roof_height,m=np.random.randint(3)):
-                    _roof_poly.coords = _roof_poly.coords*droof + displace[np.newaxis,:]
+        full_roof = self.hbp * self.hbp
+
+        if sum([v > 0 for v in self.roof_hash[cluster_nr].values()]) == full_roof:
+            #don't allow castle
+            roof_strat = rel_choice({i:roof_style_probs[i] for i in roof_style_probs if i!='castle'})
+            max_height = min(self.roof_hash[cluster_nr].values())
+            # add extra windows, or chimnies. Different from other, more detail
+            roofing_areas = [{
+                "displace": np.array(list(self.roof_hash[cluster_nr])).min(axis=0),
+                "droof": np.array([[self.hbp, self.hbp, np.random.randint(1, 1 + max_height)]])
+            }]
+
+            m = np.random.randint(1, 6)
+            rh = np.random.randint(1, min(roofing_areas[0]["droof"][0][2], self.hbp) + 1)
+            roofing_areas[0]["droof"][0][2] = 2 * rh
+        else:
+            roof_strat = rel_choice(roof_style_probs)
+            jdir = 0 if roof_strat == "slant_front" else 1
+            roofing_areas, extra_blocks, new_flats = get_y_blocks(self.roof_hash[cluster_nr], 1-jdir)
+            for loc in new_flats:
+                self.airspace[loc] = 1
+            for loc in extra_blocks:
+                self.airspace[loc] = 2
+
+            m = 0
+            max_slant = min([rf["droof"][0][2] / rf["droof"][0][jdir] for rf in roofing_areas] + [10])
+            for rf in roofing_areas:
+                rf["droof"][0][2] = round(max(1, 2 * rf["droof"][0][jdir] * max_slant))
+
+
+        aircode = 14 if roof_strat == "castle" else 12
+        for rf in roofing_areas:
+            for xb in range(rf["displace"][0], rf["displace"][0] + rf["droof"][0][0]):
+                for yb in range(rf["displace"][1], rf["displace"][1] + rf["droof"][0][1]):
+                    self.airspace[xb, yb, rf["displace"][2]] = aircode
+            if roof_strat in ["slant_front", "slope_side"]:
+                for _roof_poly in get_roof_template(roof_strat, m=m, droof=rf["droof"]):
+                    _roof_poly.coords += (dv := 100 * rf["displace"][np.newaxis, :])
+                    for _h in _roof_poly.holes:
+                        _h += dv
                     if _roof_poly.color_group == 4:
                         _roof_poly.color_group = self.building_colors[cluster_nr]
-                    self.polygons.append(_roof_poly)
-            else:
-                for key in self.roof_hash[cluster_nr]:
-                    self.roof_styles[key] = "flat"
+                    #self.polygons.append(_roof_poly)
+                    self.queue_poly(_roof_poly)
+
+        self.add_chimneys_and_housies(cluster_nr)
+
+    def add_chimneys_and_housies(self, cluster_nr):
+
+        def get_check(_kl):
+            hd = self.get_hyperdiag(_kl)
+            bla = all([self.airspace[hd[jk]] in [0,1,9,10] for jk in range(hd.index(_kl) + 1, len(hd))])
+            return bla
+
+        for kl,rh in self.roof_hash[cluster_nr].items():
+            if rh > 0 and self.airspace[kl] in [1, 10]:
+                ix,iy,iz = kl
+                if all([get_check(_kl) for _kl in [kl,(ix+1,iy,iz),(ix,iy-1,iz),(ix,iy+1,iz-1),(ix,iy,iz-1)]]):
+                    if np.random.randint(self.building_period) == 0:
+                        loc = np.array([self.get_hyperdiag(kl)[-1]])
+                        for _poly in get_single_chimney():
+                            _poly.coords += 100*loc
+                            if _poly.color_group == 4:
+                                _poly.color_group = self.building_colors[cluster_nr]
+                            #self.polygons.append(_poly)
+                            self.queue_poly(_poly)
+
+    def scope_walls(self):
+        if self.freeze_joined:
+            return None
+
+        ly = self.hbp//2 + 1
+        lx = ly+self.hbp-1
+        for ix, iy, iz in self.all_xyz():
+            pos = (ix,iy,iz)
+            cur_cluster = self.get_cluster(ix, iy)
+            if self.airspace[pos] in [2,11]: #building body
+                if self.airspace[ix,iy-1,iz] in [0,1,3,4,7,9,10,13,14]:
+                    if iy % self.building_period == ly: #original walls
+                        self.windows_hash[cur_cluster]["front"].append(pos)
+                    else:  # towers inside
+                        self.little_windows_hash[cur_cluster]["front"].append(pos)
+                if self.airspace[ix+1,iy,iz] in [0,1,3,4,6,9,10,13,14]:
+                    if ix % self.building_period == lx: #visible side
+                        self.windows_hash[cur_cluster]["side"].append(pos)
+                    else:
+                        self.little_windows_hash[cur_cluster]["side"].append(pos)
+
+        #don't need to redo this, airspace won't change anymore
+        self.freeze_joined = True
 
 
     def gcd_walls(self,cluster_number):
@@ -194,7 +299,6 @@ class Escherville:
         h_period = np.random.choice(divisors(h_gcd))
         v_period = np.random.choice(divisors(v_gcd))
 
-
         window_template = get_window(*list(np.random.randint(0,3,4)))
 
         #window template is list of windows on 100*100 total u,v plane
@@ -211,7 +315,7 @@ class Escherville:
         for x_tile in range(xmin,xmax+1,h_period):
             for z_tile in range(zmin,zmax+1,v_period):
                 if (x_tile,y,z_tile) in self.windows_hash[cluster_number]["front"]:
-                    displace = np.array([[100*x_tile,100*y,100*z_tile]])+self.camera_ratio
+                    displace = 100*np.array([[x_tile,y,z_tile]])+self.camera_ratio
                     for win in window_tile:
                         windows_list.append(
                             Poly(
@@ -221,6 +325,7 @@ class Escherville:
                             )
                         )
 
+
         #side:
         side_array = np.array(self.windows_hash[cluster_number]["side"])
         x,ymin,zmin = side_array.min(axis=0)
@@ -228,7 +333,7 @@ class Escherville:
         for y_tile in range(ymin,ymax+1,h_period):
             for z_tile in range(zmin,zmax+1,v_period):
                 if (x,y_tile,z_tile) in self.windows_hash[cluster_number]["side"]:
-                    displace = np.array([[100*(x+1),100*y_tile,100*z_tile]])+self.camera_ratio
+                    displace = 100*np.array([[x+1,y_tile,z_tile]])+self.camera_ratio
                     for win in window_tile:
                         windows_list.append(
                             Poly(
@@ -238,73 +343,98 @@ class Escherville:
                             )
                         )
 
-        return windows_list
+        # little ones:
+        for side,jj in [("front",1),("side",0)]:
+            for _x,_y,_z in self.little_windows_hash[cluster_number][side]:
+                displace = 100 * np.array([[_x+1-jj,_y,_z]]) + self.camera_ratio
+                for win in window_template:
+                    windows_list.append(
+                        Poly(
+                            coords=np.insert(win, jj, 0, axis=1) + displace,
+                            color_group=1,
+                            orientation=side
+                        )
+                    )
 
+        self.finished_polys.extend(windows_list)
 
-    def pathfinder(self,n_path_attempts = 10000):
+    def pathfinder(self):
+        # can project airspace after any of these steps.
+        self.set_building_colors()
 
-        if self.succesful_paths is None:
-            self.succesful_paths = 0
+        for path_nr in range(len(self.genz)):
+            self.add_one_escher_path(path_nr)
 
-        for st_gen in self.genz:
-            for _ in range(n_path_attempts):
-                _airspace = copy.deepcopy(self.airspace)
+        self.scope_roofs()  # no point projecting after this step
 
-                pos,target = next(st_gen)
+        for cluster_nr in range(self.Nx*self.Ny):
+            self.roofer(cluster_nr)
 
-                target_diag = [_ta for _ta in self.get_hyperdiag(target) if _ta[2] >= self.building_height]
+        self.scope_walls()  # no point projecting after this step
 
-                _airspace[pos] = 3#4
-                _airspace[target] = 4
+        for cluster_nr in range(self.Nx*self.Ny):
+            self.stretch_windows(cluster_nr)
 
-                state = "s" #no direction yet
-                pathlen = 0
-                while pathlen < 5*self.building_period and not (pos in target_diag and state in ["r","l","b","f"]):
-                    #possible positions
-                    pos_pos_data = [([tuple(pos+_d) for _d in _dir],_state) for _state,_dir in transition_directions[state].items()]
-
-                    #filter for positions that can still be built into
-                    pos_pos_data = [p for p in pos_pos_data if all([_airspace[_p]<3 for _p in p[0]])]
-
-                    if len(pos_pos_data) == 0:
-                        break
-
-                    #choose next step
-                    new_pos_data = choose_next_weighted(state,pos_pos_data)
-                    #fill in master array cell
-                    fill = dir_to_fill[new_pos_data[1]]
-
-                    pos = new_pos_data[0][0]
-
-                    _airspace[pos] = fill
-
-                    # if fill == 3:
-                    #     _possible_starts.append(pos)
-                    if fill in [5,6,7,8]: #stairs
-                        #don't put stuff directly above stairs
-                        _airspace[above(pos)] = 9
-
-                    #prevent too many crossings in one line of sight
-                    hyperdiag = self.get_hyperdiag(pos)
-                    if sum([_airspace[dp] in [3,5,6,7,8] for dp in hyperdiag]) == 2:
-                        for dp in hyperdiag:
-                            _airspace[dp] = cube_blocking[_airspace[dp]]
-
-                    state = new_pos_data[1]
-
-                    if "u" in state:
-                        pos = above(pos)
-
-                    pathlen += 1
-
-                if (pos in target_diag and state in ["r","l","b","f"]):
-                    self.airspace = _airspace
-                    self.succesful_paths += 1
-                    break
-
-        self.scope_walls_roofs()
+        self.set_poly_colors()
 
         self.project_airspace(cabinet=True)
+
+    def add_one_escher_path(self, path_number):
+        st_gen = self.genz[path_number]
+        for _ in range(self.n_path_attempts):
+            _airspace = copy.deepcopy(self.airspace)
+
+            pos, target = next(st_gen)
+
+            target_diag = [_ta for _ta in self.get_hyperdiag(target) if _ta[2] >= self.building_height]
+
+            _airspace[pos] = 13
+            _airspace[target] = 4
+
+            state = "s"  # no direction yet
+            pathlen = 0
+            while pathlen < 5 * self.building_period and not (pos in target_diag and state in ["r", "l", "b", "f"]):
+                # possible positions
+                pos_pos_data = [([tuple(pos + _d) for _d in _dir], _state) for _state, _dir in
+                                transition_directions[state].items()]
+
+                # filter for positions that can still be built into
+                pos_pos_data = [p for p in pos_pos_data if all([_airspace[_p] < 3 for _p in p[0]])]
+
+                if len(pos_pos_data) == 0:
+                    break
+
+                # choose next step
+                new_pos_data = choose_next_weighted(state, pos_pos_data)
+                # fill in master array cell
+                fill = dir_to_fill[new_pos_data[1]]
+
+                pos = new_pos_data[0][0]
+
+                _airspace[pos] = fill
+
+                # if fill == 3:
+                #     _possible_starts.append(pos)
+                if fill in [5, 6, 7, 8]:  # stairs
+                    # don't put stuff directly above stairs
+                    _airspace[above(pos)] = 9
+
+                # prevent too many crossings in one line of sight
+                hyperdiag = self.get_hyperdiag(pos)
+                if sum([_airspace[dp] in [3, 5, 6, 7, 8, 13] for dp in hyperdiag]) == 2:
+                    for dp in hyperdiag:
+                        _airspace[dp] = cube_blocking[_airspace[dp]]
+
+                state = new_pos_data[1]
+
+                if "u" in state:
+                    pos = above(pos)
+
+                pathlen += 1
+
+            if (pos in target_diag and state in ["r", "l", "b", "f"]):
+                self.airspace = _airspace
+                break
 
     def get_hyperdiag(self, intersection):
         # line of sight is along +x,-2y,+z
@@ -320,22 +450,53 @@ class Escherville:
 
         return [tuple(intersection + k * self.camera_ratio) for k in range(int(max(lowers)), int(min(uppers)) + 1)]
 
+    def set_poly_colors(self):
+        self.poly_colors = get_poly_colors()
+
     def project_airspace(self,cabinet=True):
 
-
-        for ix, iy, iz in self.all_xyz():
-            self.trim_polys(ix=ix,iy=iy,iz=iz)
+        self.trim_polys()
 
         #can put them in joined_polys to get a line between roof and building
         #self.polygons.extend(self.roof_items)
 
         self.join_these_polys()
 
-        for n_cluster in range(self.Nx*self.Ny):
-            self.joined_polys.extend(self.stretch_windows(n_cluster))
+        #have self.pre-join polys
+        #have polys from trim_polys as local var
+        #have self.post-join polys
+        self.joined_polys = self.finished_polys + self.merged_polys
 
 
+        fig, ax = plt.subplots(figsize=(20, 10))
 
+        if cabinet:
+
+            self.topoplot(ax)
+
+
+        else:
+
+            ax = Axes3D(fig, auto_add_to_figure=False)
+            ax.set_xlim3d(0, 100*self.Lx)
+            ax.set_ylim3d(0, 100*self.Ly)
+            ax.set_zlim3d(0, 100*self.Lz)
+            ax.set_proj_type("ortho")
+            fig.add_axes(ax)
+            for _poly in self.joined_polys:
+                c = self.poly_colors[_poly.merge_tuple]
+                pol = Poly3DCollection([_poly.coords])
+                # linen = Line3DCollection(_poly.edges)
+                # linen.set_color("k")
+                pol.set_color(mpl.colors.rgb2hex(c))
+                pol.set_edgecolor("k")
+                ax.add_collection3d(pol)
+                # ax.add_collection3d(linen)
+
+        plt.savefig(f"Escherville_{seed}.png",dpi=300)
+        plt.show()
+
+    def topoplot(self, ax):
 
         self.construct_graph()  # fills in self.polygraph
 
@@ -346,96 +507,60 @@ class Escherville:
                 model = cp_model.CpModel()
                 cancut = {edge: model.NewBoolVar(str(edge)) for edge in subgraph.edges}
 
-                #don't need this if we _can_ have polys with holes in them.
+                # don't need this if we _can_ have polys with holes in them.
                 # for edge in subgraph.edges:
                 #     if self.joined_polys[edge[0]].flat_shapely.contains(self.joined_polys[edge[1]].flat_shapely):
                 #         model.Add(cancut[edge] == 0)  # can't plot nontrivial topologies
 
                 for cycle in nx.simple_cycles(subgraph):
-                    model.Add(sum([cancut[(cycle[j-1],cycle[j])] for j in range(len(cycle))])>0)
+                    model.Add(sum([cancut[(cycle[j - 1], cycle[j])] for j in range(len(cycle))]) > 0)
                 model.Minimize(sum([cancut[k] for k in cancut]))
                 solver = cp_model.CpSolver()
                 solver.Solve(model)
                 to_break.extend([edge for edge in subgraph.edges if solver.Value(cancut[edge])])
-
         # print([
         #     len(list(nx.simple_cycles(self.polygraph.subgraph(c))))
         #     for c in sorted(nx.strongly_connected_components(self.polygraph), key=len, reverse=True)
         # ])
-
         print("break:", to_break)
 
         self.polygraph.remove_edges_from(to_break)
-
         break_dict = {}
         for edge in to_break:
-            if edge[0] in break_dict:
-                break_dict[edge[0]].append(edge[1])
+            break_dict.setdefault(edge[0], []).append(edge[1])
+        patches = []
+        facecolors = []
+
+        for ind in nx.topological_sort(self.polygraph):
+            _poly = self.joined_polys[ind]
+
+            if ind in break_dict:
+                flat_polys = _poly.subtract([self.joined_polys[k] for k in break_dict[ind]])
             else:
-                break_dict[edge[0]] = [edge[1]]
+                flat_polys = [_poly.flat_shapely]
 
-        print("working")
+            c = self.poly_colors[_poly.merge_tuple]
 
+            patches.extend([patch_polygon(fs) for fs in flat_polys])
+            facecolors.extend([c] * len(flat_polys))
 
-        #fig = plt.figure(figsize=(200, 80))
-
-        poly_colors = get_poly_colors()
-
-        if cabinet:
-
-            fig, ax = plt.subplots(figsize=(200, 80))
-            patches = []
-            facecolors = []
-
-
-            for ind in nx.topological_sort(self.polygraph):
-                _poly=self.joined_polys[ind]
-
-                if ind in break_dict: # need to modify subtract to output shapely polygons.
-                    # and also allow for polygons with holes from join_polys.
-                    flat_polys = _poly.subtract([self.joined_polys[k] for k in break_dict[ind]])
-                else:
-                    flat_polys = [_poly.flat_shapely]
-
-                c = poly_colors[_poly.merge_tuple]
-
-                patches.extend([patch_polygon(fs) for fs in flat_polys])
-                facecolors.extend([c]*len(flat_polys))
-
-                # for fp in flat_polys:
-                #     x, y = fp.T
-                #     plt.fill(x, y, facecolor=c, edgecolor="k", zorder=1, lw=1)
-            pa = PatchCollection(patches, facecolors=facecolors,
-                                 edgecolors="k", lw=1, joinstyle="round", capstyle="round")
-
-            ax.add_collection(pa)
-            ax.autoscale_view()
-
-                #proj_lines = np.array(_poly.edges).dot(flat_proj).T.tolist()
-                #plt.plot(*proj_lines, color="k", zorder=1, solid_capstyle="round")  # , lw=1.5, ms=1, marker= "o")
-        else:
-            ax = Axes3D(fig, auto_add_to_figure=False)
-            ax.set_xlim3d(0, 100*self.Lx)
-            ax.set_ylim3d(0, 100*self.Ly)
-            ax.set_zlim3d(0, 100*self.Lz)
-            ax.set_proj_type("ortho")
-            fig.add_axes(ax)
-            for _poly in self.joined_polys:
-                c = poly_colors[_poly.merge_tuple]
-                pol = Poly3DCollection([_poly.coords])
-                # linen = Line3DCollection(_poly.edges)
-                # linen.set_color("k")
-                pol.set_color(mpl.colors.rgb2hex(c))
-                pol.set_edgecolor("k")
-                ax.add_collection3d(pol)
-                # ax.add_collection3d(linen)
-
-        plt.show()
+            # for fp in flat_polys:
+            #     x, y = fp.T
+            #     plt.fill(x, y, facecolor=c, edgecolor="k", zorder=1, lw=1)
+        pa = PatchCollection(patches, facecolors=facecolors,
+                             edgecolors="k", lw=1, joinstyle="round", capstyle="round")
+        ax.add_collection(pa)
+        ax.autoscale_view()
 
     def all_xyz(self):
         return itertools.product(range(1, self.Lx + 1), range(1, self.Ly + 1), range(1, self.Lz + 1))
 
     def join_these_polys(self):
+
+        if self.freeze_joined and self.merged_polys:
+            return None
+        self.merged_polys = []
+
         orientation_fixed_dim = {
             "top": 2,
             "side": 0,
@@ -443,18 +568,20 @@ class Escherville:
         }
         for merge_tuple in self.group_colors:
             d = orientation_fixed_dim[merge_tuple[1]]
-            cardinal_polys = sorted([p for p in self.polygons if (p.merge_tuple == merge_tuple and p.merges)],
+            cardinal_polys = sorted([p for p in self.unjoined_polys if p.merge_tuple == merge_tuple],
                                     key=lambda x: x.coords[0, d])
+            if not cardinal_polys:
+                continue
             plane_coord = cardinal_polys[0].coords[0, d]
             this_slice = []
             for _poly in cardinal_polys:
                 if _poly.coords[0, d] != plane_coord:
-                    self.joined_polys.extend(join_polygons(this_slice))
+                    self.merged_polys.extend(join_polygons(this_slice))
                     this_slice = []
                     plane_coord = _poly.coords[0, d]
                 this_slice.append(_poly)
-            self.joined_polys.extend(join_polygons(this_slice))
-        self.joined_polys.extend([p for p in self.polygons if not p.merges])
+            self.merged_polys.extend(join_polygons(this_slice))
+        #self.joined_polys.extend([p for p in self.polygons if not p.merges])
 
     def construct_graph(self):
         #sort by left bdy of bounding box
@@ -483,66 +610,71 @@ class Escherville:
         if forth:
             self.polygraph.add_edge(k, j)
 
-    def trim_polys(self, ix, iy, iz):
+    def trim_polys(self):
+
+        for ix, iy, iz in self.all_xyz():
+            # put all this logic into one function.
+            cur_fill_code = self.airspace[(ix, iy, iz)]
+
+            cluster_nr = self.get_cluster(ix,iy)
+            color_nr = self.building_colors[cluster_nr]
+
+            if self.airspace[(ix, iy, iz - 1)] in [2, 11]:  # inside building
+                cur_fill = cube_filling_building[cur_fill_code]
+            else:
+                cur_fill = cube_filling_free[cur_fill_code]
 
 
-        # put all this logic into one function.
-        cur_fill_code = self.airspace[(ix, iy, iz)]
-
-        cluster_nr = self.get_cluster(ix,iy)
-        color = self.building_colors[cluster_nr]
-
-        if self.airspace[(ix, iy, iz - 1)] in [2, 11]:  # inside building
-            cur_fill = cube_filling_building[cur_fill_code]
-        else:
-            cur_fill = cube_filling_free[cur_fill_code]
-
-        #remove hidden faces
-        if cur_fill_code == 3:
-            fence_off = [0,1,9,10]
-            cut_cur_fill = [cur_fill[0]]
-            if self.airspace[(ix, iy - 1, iz)] in fence_off and self.airspace[(ix, iy - 1, iz - 1)] != 7:
-                cut_cur_fill.append(cur_fill[1])
-            if self.airspace[(ix, iy + 1, iz)] in fence_off and self.airspace[(ix, iy + 1, iz - 1)] != 8:
-                cut_cur_fill.append(cur_fill[2])
-            if self.airspace[(ix - 1, iy, iz)] in fence_off and self.airspace[(ix - 1, iy, iz - 1)] != 5:
-                cut_cur_fill.append(cur_fill[3])
-            if self.airspace[(ix + 1, iy, iz)] in fence_off and self.airspace[(ix + 1, iy, iz - 1)] != 6:
-                cut_cur_fill.append(cur_fill[4])
-            cur_fill = cut_cur_fill
-        elif cur_fill_code in [2, 11]:
-            cut_cur_fill = []
-            if self.airspace[(ix, iy - 1, iz)] not in [2, 11]:
-                cut_cur_fill.append(cur_fill[0])
-            if self.airspace[(ix + 1, iy, iz)] not in [2, 11]:
-                cut_cur_fill.append(cur_fill[1])
-            cur_fill = cut_cur_fill
-        elif cur_fill_code in [1, 4, 10]:  # roof, no building below
-            cut_cur_fill = []
-            if cur_fill_code == 4 or self.roof_styles[(ix, iy, iz)] == "flat":
-                cut_cur_fill.append(cur_fill[0])
-            if self.airspace[(ix, iy, iz - 1)] not in [2, 11]:
-                if not (self.airspace[(ix, iy - 1, iz - 1)] in [2, 11] or
-                        self.airspace[(ix, iy - 1, iz)] in [1, 4, 10]):
+            #remove hidden faces
+            if cur_fill_code in [3,13]: #flat path and source flat path
+                cut_cur_fill = [cur_fill[0]]
+                cut_cur_fill.extend(self.get_fences(cur_fill[1:], ix, iy, iz, code=cur_fill_code))
+                cur_fill = cut_cur_fill
+            elif cur_fill_code in [2, 11]:
+                cut_cur_fill = []
+                if self.airspace[(ix, iy - 1, iz)] not in [2, 11]:
+                    cut_cur_fill.append(cur_fill[0])
+                if self.airspace[(ix + 1, iy, iz)] not in [2, 11]:
                     cut_cur_fill.append(cur_fill[1])
-                if not (self.airspace[(ix + 1, iy, iz - 1)] in [2, 11] or
-                        self.airspace[(ix + 1, iy, iz)] in [1, 4, 10]):
+                cur_fill = cut_cur_fill
+            elif cur_fill_code in [1, 10, 12, 14]:  # roof, no building below
+                cut_cur_fill = []
+                if self.airspace[(ix, iy, iz - 1)] not in [2, 11]:
+                    if not (self.airspace[(ix, iy - 1, iz - 1)] in [2, 11] or
+                            self.airspace[(ix, iy - 1, iz)] in [1, 4, 10]):
+                        cut_cur_fill.append(cur_fill[0])
+                    if not (self.airspace[(ix + 1, iy, iz - 1)] in [2, 11] or
+                            self.airspace[(ix + 1, iy, iz)] in [1, 4, 10]):
+                        cut_cur_fill.append(cur_fill[1])
+                if cur_fill_code in [1,10,14]:
                     cut_cur_fill.append(cur_fill[2])
-            cur_fill = cut_cur_fill
+                if cur_fill_code == 14:
+                    cut_cur_fill.extend(self.get_fences(cur_fill[3:], ix, iy, iz, code=14))
+                cur_fill = cut_cur_fill
 
-        #modify and finalize the polygon
-        displacement = np.array([ix, iy, iz])*100
-        for _poly in cur_fill:
-            new_poly = copy.deepcopy(_poly)
-            if new_poly.color_group == 4: #recolor buildings
-                new_poly.color_group = color
-            new_poly.coords += displacement
-            self.polygons.append(new_poly)
-            if new_poly.merges:
-                _key = (new_poly.color_group,new_poly.orientation)
-                if _key not in self.group_colors:
-                    self.group_colors.append(_key)
+            #modify and finalize the polygon
+            displacement = np.array([ix, iy, iz])*100
+            for _poly in cur_fill:
+                new_poly = copy.deepcopy(_poly)
+                if new_poly.color_group == 4: #recolor buildings
+                    new_poly.color_group = color_nr
+                new_poly.coords += displacement
+                #self.polygons.append(new_poly)
+                self.queue_poly(new_poly)
 
+    def get_fences(self, cur_fill, ix, iy, iz, code):
+        cut_cur_fill = []
+        extra = [14] if code in [3,13] else [5,6,7,8] #might have to remove these four...
+        fence_off = [0, 1, 9, 10] + extra
+        if self.airspace[(ix, iy - 1, iz)] in fence_off and self.airspace[(ix, iy - 1, iz - 1)] != 7:
+            cut_cur_fill.append(cur_fill[0])
+        if self.airspace[(ix, iy + 1, iz)] in fence_off and self.airspace[(ix, iy + 1, iz - 1)] != 8:
+            cut_cur_fill.append(cur_fill[1])
+        if self.airspace[(ix + 1, iy, iz)] in fence_off and self.airspace[(ix + 1, iy, iz - 1)] != 6:
+            cut_cur_fill.append(cur_fill[2])
+        if self.airspace[(ix - 1, iy, iz)] in fence_off and self.airspace[(ix - 1, iy, iz - 1)] != 5:
+            cut_cur_fill.append(cur_fill[3])
+        return cut_cur_fill
 
 
 # pers_x = -camera_ratio[0]/camera_ratio[1]

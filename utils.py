@@ -74,7 +74,8 @@ def join_polygons(polys: list) -> list:
     """
     comps = [(1, 2), (0, 2), (0, 1)]
     fixed_1 = get_fixed_coord(polys[0].coords)
-    parsed_polys  = [Polygon(p.coords[:,comps[fixed_1[0]]]) for p in polys]
+
+    parsed_polys = [Polygon(p.coords[:,comps[fixed_1[0]]]) for p in polys]
 
     unified = mapping(unary_union(parsed_polys))
 
@@ -90,10 +91,7 @@ def join_polygons(polys: list) -> list:
     merged_polys = []
 
     for merged_coords in new_coords:
-        if len(merged_coords) > 1:
-            holes = [restore_dim(u) for u in merged_coords[1:]]
-        else:
-            holes = []
+        holes = [restore_dim(u) for u in merged_coords[1:]]
         merged_polys.append(
             Poly(coords=restore_dim(merged_coords[0]),
             orientation=polys[0].orientation,
@@ -129,7 +127,8 @@ cube_blocking = {
     8: 8,
     9: 9,
     10: 10,
-    11: 11
+    11: 11,
+    13: 13
 }
 
 
@@ -212,3 +211,136 @@ transition_directions = {key: {i: np.array(directions[i]) for i in obj} for (key
 #                 cluster_map.append([(ix,iy,iz)])
 #
 #     return cluster_map, cluster_hash
+
+
+def get_y_blocks(roof_hash: dict, roof_dir: int) -> tuple:
+    """
+    take a dict of (x,y,z) keys and height (int) values,
+    and output two lists: roof position dicts, and
+    coordinates of extra building blocks
+    Also, don't look at me, I'm hideous
+    :param roof_hash: single value of self.roof_hash from escherville
+    :param roof_dir: 0 for roofs with a front, 1 for roofs with a side.
+    :return:
+    """
+    target = [pos for pos in roof_hash if roof_hash[pos]<0]
+
+    coords = np.array(list(roof_hash))
+    front_left = coords.min(axis=0)
+    back_right = coords.max(axis=0)
+
+    if target:
+        dy_enforce = True
+        dy_limit = back_right[1]-target[0][1]
+    else:
+        dy_enforce = False
+
+    xmin = front_left[0]
+    xmax = back_right[0]
+    zmin = front_left[2]
+    max_height = max(roof_hash.values())
+    extra_blocks = []
+    max_dz = 0
+    roofing_areas = []
+    new_flats = []
+    for dz in range(max_height):
+        extra_roofs = []
+        z = zmin + dz
+        for dy in range(back_right[1]-front_left[1]+1):
+            y = back_right[1]-dy
+            fly = True
+            if dy_enforce and dy>=dy_limit:
+                fly = False #dont build beyond escher targets and sources
+            for dx in range(1+(xmax-xmin)//2):
+                xl = xmin+dx
+                xr = xmax-dx
+                pl = (xl,y,z)
+                pr = (xr,y,z)
+                #for left point, right point:
+                support = (dz==0 and pl in roof_hash) or (xl,y,z-1) in extra_blocks,  (dz==0 and pr in roof_hash) or (xr,y,z-1) in extra_blocks
+                backing = (dy==0 or (xl,y+1,z) in extra_blocks), (dy==0 or (xr,y+1,z) in extra_blocks)
+                hl = roof_hash.get((xl,y,zmin),0)
+                hr = roof_hash.get((xr,y,zmin),0)
+                skyspace = hl > dz, hr > dz
+                if fly and all(support) and all(backing) and all(skyspace) and (np.random.randint(3+dy)>0) and (dz+1<max_height):
+                    extra_blocks.extend([pl,pr])
+                    max_dz = max(max_dz,dz)
+                elif fly and all(support) and all(skyspace):
+                    extra_roofs.extend([(xl,y,hl-dz),(xr,y,hr-dz)])
+                elif dz: # new flat roofs above old roof level
+                    if support[0] and skyspace[0]:
+                        new_flats.append(pl)
+                    if support[1] and skyspace[1]:
+                        new_flats.append(pr)
+        for roof_patch in get_roof_patches(extra_roofs,j=roof_dir):
+            displace = np.array(roof_patch["botleft"]+[z])
+            droof = np.array([roof_patch["droof"]])
+            roofing_areas.append({
+                "displace": displace,
+                "droof": droof,
+            })
+        if dz > max_dz:  # gap
+            break
+    return roofing_areas,extra_blocks,new_flats
+
+
+def get_roof_patches(squares: list, j: int):
+    if not squares:
+        return []
+
+    #square is (x,y,height)
+    if j==2: #castle walls, remove using trim_poly_logic.
+        return [{"botleft": list(s[:2]), "droof": [1,1,1]} for s in squares]
+
+    #j is 0 or 1
+    squares = sorted(squares,key = lambda x: (x[1-j],x[j]))
+    left = squares[0]
+    right = squares[0]
+    curheight = left[2]
+    rods = {}
+    for h,square in enumerate(squares[1:]):
+        if square[j] != squares[h][j]+1 or square[1-j] != squares[h][1-j]:
+            rods.setdefault((left[j],right[j]),[]).append((left[1-j],curheight))
+            left = square
+            curheight = left[2]
+        right = square
+        curheight = min(curheight,right[2])
+    rods.setdefault((left[j], right[j]), []).append((left[1-j],curheight))
+    roof_patches = []
+    ord = 1-2*j
+
+    def bottle_patch(_key, _l, njm, _w, _ch):
+        return {
+            "botleft": [_key[0], njm][::ord],
+            "droof": [_w, _l][::ord] + [_ch]
+        }
+
+    for key, val in rods.items():
+        w = key[1]-key[0]+1
+        l = 1
+        not_j_min = val[0][0]
+        curheight = val[0][1]
+        for h,v in enumerate(val[1:]):
+            if val[h][0] != v[0]-1:
+                roof_patches.append(bottle_patch(key, l, not_j_min, w, curheight))
+                not_j_min = v[0]
+                curheight = v[1]
+                l = 0
+            l += 1
+            curheight = min(curheight,v[1])
+        roof_patches.append(bottle_patch(key, l, not_j_min, w, curheight))
+    return roof_patches
+
+def rel_choice(D: dict):
+    tot = np.cumsum(list(D.values()))
+    needle = np.random.randint(tot[-1])
+    for k,t in zip(D,tot):
+        if needle < t:
+            return k
+
+
+
+
+
+
+

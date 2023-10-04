@@ -61,11 +61,15 @@ class Poly:
                 else:
                     diff_list = [diff]
                 for _partpoly in diff_list:
+                    if not hasattr(_partpoly,"exterior"):
+                        continue
                     _co = np.insert(_partpoly.exterior.coords.xy,1,0,0).T[:-1]
                     if sum(self.distance_to_plane(_co)) < sum(other_poly.distance_to_plane(_co)): #other is closer to camera
                         original = original.difference(_partpoly)
                     if list(_partpoly.interiors):
                         print("missed an interior")
+                    if original.area == 0:
+                        print("reduced to nothing")
                 #get components of it with mapping
                 #find which ones are in front, with normal vec logic
                 #remove those from original.
