@@ -7,6 +7,7 @@ from classes import Poly
 from config import path_weights, curvature_weights
 from matplotlib.path import Path
 from matplotlib.patches import PathPatch
+import matplotlib.pyplot as plt
 
 from shapely.geometry.polygon import orient
 
@@ -338,14 +339,7 @@ def rel_choice(D: dict):
         if needle < t:
             return k
 
-
-
-
-import matplotlib as mpl
-
 labels = ["path","window","roof","bg","build_1","build_2","build_3"]
-
-
 
 def show_color_scheme(color_list):
     nrows = len(color_list)

@@ -371,24 +371,7 @@ class Escherville:
         self.finished_polys.extend(windows_list)
 
     def pathfinder(self):
-        # can project airspace after any of these steps.
-
-        # self.set_building_colors()
-        #
-        # for path_nr in range(len(self.genz)):
-        #     self.add_one_escher_path(path_nr)
-        #
-        # self.scope_roofs()  # no point projecting after this step
-        #
-        # for cluster_nr in range(self.Nx*self.Ny):
-        #     self.roofer(cluster_nr)
-        #
-        # self.scope_walls()  # no point projecting after this step
-        #
-        # for cluster_nr in range(self.Nx*self.Ny):
-        #     self.stretch_windows(cluster_nr)
-        #
-        # self.set_poly_colors()
+        # can be used to create a full escherville without the outside class interface
 
         self.get_task_stack()
         while self.task_stack:
@@ -723,88 +706,9 @@ class Escherville:
         return cut_cur_fill
 
 
-# pers_x = -camera_ratio[0]/camera_ratio[1]
-# pers_z = -camera_ratio[2]/camera_ratio[1]
-
-# def old_custom_zorder(poly1, poly2):
-#     tolerance = 1e-6
-#     min1, max1 = poly1.min(axis=0), poly1.max(axis=0)
-#     min2, max2 = poly2.min(axis=0), poly2.max(axis=0)
-#     dim_order = [int(min1[j]+tolerance > max2[j]) - int(max1[j] < min2[j] + tolerance) for j in [0,1,2]]
-#     dim_order[1] *= -1 #y-coord is reversed
-#     if sum([a == 0 for a in dim_order]) > 1:
-#         return sum(dim_order)
-#     else:
-#         #use the other trick with planes.
-#         d1 = poly1.dot(camera_ratio)
-#         d2 = poly2.dot(camera_ratio)
-#         dd1 = (max(d1),min(d1))
-#         dd2 = (max(d2),min(d2))
-#         if dd1 == dd2:
-#             return 0
-#         else:
-#             return 2*(dd1 > dd2) -1
-
-# def customer_zorder(coords,other_coords):
-#
-#     margin = 6 #significant digits, if points are this close to the plane, consider them on the plane.
-#
-#     uv = None
-#
-#     if uv is None:
-#         uv = coords[1:3] - coords[0] + 0.
-#
-#         sign_camera = np.sign(np.linalg.det(np.insert(uv, 2, camera_ratio, 0)))
-#         uv[0] *= sign_camera
-#
-#         uv = uv[np.newaxis, :, :]
-#
-#     sign_distances = np.sign(np.round(np.linalg.det(
-#         np.insert(uv * np.ones((len(other_coords), 1, 1)), 2, other_coords - coords[0], 1)
-#     ), margin))
-#
-#     if -1 in sign_distances and 1 in sign_distances:
-#         return 0  # points on both sides of the plane
-#     else:
-#         return -sum(sign_distances)
-
-
-
-# def get_hyperdiag(arrshape,intersection):
-#     #line of sight is along +x,-2y,+z
-#
-#     lowers,uppers = [],[]
-#
-#     for j in [0,1,2]:
-#         bdys = sorted([-intersection[j]/camera_ratio[j],(arrshape[j]-intersection[j]-1)/camera_ratio[j]])
-#         lowers.append(bdys[0])
-#         uppers.append(bdys[1])
-#
-#     return [tuple(intersection+k*camera_ratio) for k in range(int(max(lowers)),int(min(uppers))+1)]
-
-# from shapely.geometry import Polygon
-#
-# holy = Polygon([[0,4],[4,4],[4,0],[0,0]][::-1],holes=[[[2,2],[2,3],[3,3],[3,2]]])
-# moly = Polygon([[10,4],[14,4],[14,0],[10,0]])
-# zoly = Polygon([[1,2.5],[2.5,2.5],[2.5,1],[1,1]])
-
-
-
-
-
-
-
-
 # wise to increase the canvas size with the number of buildings depicted. Then the black lines will have
 #a nice weight.
 if __name__ == '__main__':
     mce = Escherville(3, 4, building_period=8, building_height=8)
     mce.pathfinder()
-    #tester = cityscape(9)
-    #tester.plotall(-12,12,18,4)
 
-    #
-    # tester = cityscape(1001)
-    # tester.plotall(-10,10,20,4)
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
