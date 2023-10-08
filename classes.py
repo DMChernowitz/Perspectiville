@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
-from shapely.geometry import Polygon, mapping
+from shapely.geometry import Polygon
 import copy
 
 from config import camera_ratio, proj_array
@@ -43,6 +43,20 @@ class Poly:
         self._camera_side = None
         self._mm_uv = None
         self._hole_projections = None
+
+    def scoot(self, dvector: np.array):
+        """
+        Move the polygons 3d coordinates and its holes
+        :param dvector: displacement vector
+        :return: none
+        """
+        if dvector.shape == (3,):
+            dvector = dvector[np.newaxis,:]
+        elif dvector.shape != (1,3):
+            raise ValueError("Incorrect dimension")
+        self.coords += dvector
+        for _hole in self.holes:
+            _hole += dvector
 
     def distance_to_plane(self, _co):
         return -(self.d_const + _co.dot(self.normal_vec)) / self.normal_vec.dot(self.camera_ratio)

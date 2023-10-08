@@ -138,14 +138,14 @@ directions = { #encoding
     "l": [[-1, 0, 0]],  # moving left
     "b": [[0, 1, 0]],  # moving back
     "f": [[0, -1, 0]],  # moving front
-    "ru": [[1, 0, 0],[1,0,1]],  # moving right and up
-    "rd": [[1, 0, -1],[1,0,0]],  #moving right and down
-    "lu": [[-1, 0, 0],[-1,0,1]],  # moving left and up
-    "ld": [[-1, 0, -1],[-1,0,0]],  # moving left and down
-    "bu": [[0, 1, 0],[0,1,1]],  # moving back and up
-    "bd": [[0, 1, -1],[0,1,0]],  # moving back and down
-    "fu": [[0, -1, 0],[0,1,1]],  # moving front and up
-    "fd": [[0, -1, -1],[0,-1,0]]  # moving front and down
+    "ru": [[1, 0, 0], [1,0,1]],  # moving right and up
+    "rd": [[1, 0, -1], [1,0,0]],  #moving right and down
+    "lu": [[-1, 0, 0], [-1,0,1]],  # moving left and up
+    "ld": [[-1, 0, -1], [-1,0,0]],  # moving left and down
+    "bu": [[0, 1, 0], [0,1,1]],  # moving back and up
+    "bd": [[0, 1, -1], [0,1,0]],  # moving back and down
+    "fu": [[0, -1, 0], [0,-1,1]],  # moving front and up
+    "fd": [[0, -1, -1], [0,-1,0]]  # moving front and down
 }
 
 dir_to_fill = {
@@ -231,7 +231,7 @@ def get_y_blocks(roof_hash: dict, roof_dir: int) -> tuple:
 
     if target:
         dy_enforce = True
-        dy_limit = back_right[1]-target[0][1]
+        dy_limit = back_right[1]-max([t[1] for t in target])
     else:
         dy_enforce = False
 
@@ -337,6 +337,40 @@ def rel_choice(D: dict):
     for k,t in zip(D,tot):
         if needle < t:
             return k
+
+
+
+
+import matplotlib as mpl
+
+labels = ["path","window","roof","bg","build_1","build_2","build_3"]
+
+
+
+def show_color_scheme(color_list):
+    nrows = len(color_list)
+    figh = 0.35 + 0.15 + (nrows + (nrows - 1) * 0.1) * 0.22
+    fig, axs = plt.subplots(nrows=nrows + 1, figsize=(6.4, figh))
+    fig.subplots_adjust(top=1 - 0.35 / figh, bottom=0.15 / figh,
+                        left=0.2, right=0.99)
+    h=0
+    for col, ax in zip(color_list,axs):
+        for j,c in enumerate(col):
+            ax.fill([j,j,j+1,j+1],[0,1,1,0],color=c)
+
+        ax.text(-0.01, 0.5, str(h), va='center', ha='right', fontsize=10,
+                transform=ax.transAxes)
+        h+=1
+
+    for j,lab in enumerate(labels):
+        axs[-1].text(j/7.5+0.11, -0.5, lab, va='top', ha='center', fontsize=10,
+                transform=ax.transAxes)
+
+    for ax in axs:
+        ax.set_axis_off()
+
+
+
 
 
 
