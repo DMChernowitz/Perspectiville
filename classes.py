@@ -1,6 +1,15 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
+from enum import Enum
+
+class ColorGroups(Enum):
+    path = 0
+    window = 1
+    roof = 2
+    background = 3
+    building_1 = 4
+    building_2 = 5
+    building_3 = 6
+
 
 from shapely.geometry import Polygon
 import copy
@@ -84,6 +93,7 @@ class Poly:
                         print("missed an interior")
                     if original.area == 0:
                         print("reduced to nothing")
+                        return []
                 #get components of it with mapping
                 #find which ones are in front, with normal vec logic
                 #remove those from original.

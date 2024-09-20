@@ -400,8 +400,8 @@ def get_roof_template(orient, m, droof):
                 color_group=2)
             )
         if droof[0][0] >= 2 and m in [1,2]:
-            dw = 3 * np.random.randint(3-m, 4)
-            dl = 5 * np.random.randint(3-m, 4)
+            dw = 2 * np.random.randint(3-m, 4)
+            dl = 6 * np.random.randint(3-m, 4)
             for j in range(l): #add skylights
                 polylist.append(Poly(
                     coords=droof * [
@@ -441,8 +441,8 @@ def get_roof_template(orient, m, droof):
                 color_group=2)
             )
         if droof[0][1] >= 2 and m in [1,2]:
-            dw = 3 * np.random.randint(3-m, 4)
-            dl = 5 * np.random.randint(3-m, 4)
+            dw = 2 * np.random.randint(3-m, 4)
+            dl = 6 * np.random.randint(3-m, 4)
             for j in range(l):
                 polylist.append(Poly(
                     coords=droof * [

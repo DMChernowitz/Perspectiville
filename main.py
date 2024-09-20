@@ -35,7 +35,7 @@ from utils import (
 from templates import cube_filling_building, cube_filling_free, get_window, get_roof_template, get_single_chimney
 from classes import Poly
 
-from config import unit_cell_paths, get_poly_colors, roof_style_probs, n_colors
+from config import unit_cell_paths, get_poly_colors, roof_style_probs, n_colors, hatch_bool
 
 
 #all sizes are in 100 units
@@ -48,7 +48,7 @@ class Escherville:
         self.building_height = building_height
         self.Lx = Nx * building_period
         self.Ly = Ny * building_period
-        self.Lz = building_height+3  # maximum build height
+        self.Lz = building_height+10  # maximum build height
         # create array to hold state of the world.
         self.airspace = np.zeros((self.Lx + 2, self.Ly + 2, self.Lz + 2)) + 9
         self.airspace[1:-1, 1:-1, 1:-1] = 0
@@ -87,6 +87,7 @@ class Escherville:
         self.freeze_joined = False
 
         self.get_task_stack()
+        self.pointer = None
 
 
     def queue_poly(self,poly):
@@ -123,7 +124,14 @@ class Escherville:
 
 
     def set_building_colors(self):
-        self.building_colors = np.random.randint(4, n_colors + 4, self.Nx*self.Ny)
+        n_buildings = self.Nx*self.Ny
+        n_each_color = n_buildings//n_colors
+        pre_building_colors = sum([[j]*n_each_color for j in range(4,n_colors+4)],[])
+        while len(pre_building_colors)<n_buildings:
+            pre_building_colors.append(np.random.randint(4,n_colors+4))
+        np.random.shuffle(pre_building_colors)
+
+        self.building_colors = pre_building_colors#np.random.randint(4, n_colors + 4, self.Nx*self.Ny)
 
     def get_path_sources_targets(self,unit_cell):
         ux = len(unit_cell)
@@ -179,7 +187,7 @@ class Escherville:
             pos = (ix,iy,iz)
             cur_cluster = self.get_cluster(ix, iy)
             if self.airspace[pos] in [1,10]: #building roof:
-                for dz in range(1,self.Lz-iz+1):
+                for dz in range(1,min(self.Lz-iz+1,5)):
                     if self.airspace[ix,iy,iz+dz] not in [0,9]:
                         break
                 self.roof_hash[cur_cluster][pos] = dz
@@ -213,7 +221,8 @@ class Escherville:
                 self.airspace[loc] = 2
 
             m = 0
-            max_slant = min([rf["droof"][0][2] / rf["droof"][0][jdir] for rf in roofing_areas] + [10])
+            max_slant = min([rf["droof"][0][2] / rf["droof"][0][jdir] for rf in roofing_areas] + [9])
+            max_slant = np.random.uniform(0.5*max_slant,max_slant)
             for rf in roofing_areas:
                 rf["droof"][0][2] = round(max(1, 2 * rf["droof"][0][jdir] * max_slant))
 
@@ -245,7 +254,7 @@ class Escherville:
                 ix,iy,iz = kl
                 if all([get_check(_kl) for _kl in [kl,(ix+1,iy,iz),(ix,iy-1,iz),(ix,iy+1,iz-1),(ix,iy,iz-1)]]):
                     if np.random.randint(self.building_period) == 0:
-                        loc = np.array([self.get_hyperdiag(kl)[-1]])
+                        loc = np.array([self.get_hyperdiag(kl)[-1]])+self.camera_ratio
                         for _poly in get_single_chimney():
                             _poly.scoot(100*loc)
                             if _poly.color_group == 4:
@@ -379,13 +388,19 @@ class Escherville:
             fun = getattr(self,task_dict["task"])
             fun(*task_dict["args"])
 
-        self.project_airspace(cabinet=True)
+        fig,ax = plt.subplots(figsize=(10,10))
+
+        self.project_airspace(cabinet=True,ax=ax)
+        plt.show()
+        fig.savefig(f"Hatchville_yo.png",dpi=400, bbox_inches='tight')
 
     def next_task(self):
         task_dict = self.task_stack.pop(0)
         fun = getattr(self, task_dict["task"])
         fun(*task_dict["args"])
         return task_dict["plot"]
+
+
 
     def add_one_escher_path(self, path_number):
         st_gen = self.genz[path_number]
@@ -401,7 +416,7 @@ class Escherville:
 
             state = "s"  # no direction yet
             pathlen = 0
-            while pathlen < 5 * self.building_period and not (pos in target_diag and state in ["r", "l", "b", "f"]):
+            while (pathlen < 3 * self.building_period) and not (pos in target_diag and state in ["r", "l", "b", "f"]):
                 # possible positions
                 pos_pos_data = [([tuple(pos + _d) for _d in _dir], _state) for _state, _dir in
                                 transition_directions[state].items()]
@@ -440,7 +455,7 @@ class Escherville:
 
                 pathlen += 1
 
-            if (pos in target_diag and state in ["r", "l", "b", "f"]):
+            if (pos in target_diag) and (state in ["r", "l", "b", "f"]) and (pathlen > 3):
                 self.airspace = _airspace
                 break
 
@@ -560,10 +575,27 @@ class Escherville:
             #     plt.fill(x, y, facecolor=c, edgecolor="k", zorder=1, lw=1)
         pa = PatchCollection(patches, facecolors=facecolors,
                              edgecolors="k", lw=1, joinstyle="round", capstyle="round")
-        # fig, ax = plt.subplots(figsize=(20, 10))
-        ax.set_facecolor(self.poly_colors[(3,"top")])
-        ax.add_collection(pa)
+
+        if not hatch_bool:
+            ax.set_facecolor(self.poly_colors[(3,"top")])
+            ax.add_collection(pa)
+        else:
+            ax.set_facecolor("k")
+            for c,patch in zip(facecolors,patches):
+
+                hn = int(sum(c))+1
+                hatch = "\\\\"*hn
+
+                patch.set_hatch(hatch)
+                patch.set_facecolor("k")
+                patch.set_linewidth(1.5)
+                patch.set_capstyle("round")
+
+                patch.set_edgecolor("w")
+                ax.add_patch(patch)
+
         ax.autoscale_view()
+        ax.set_aspect(1)
         ax.xaxis.set_major_locator(ticker.NullLocator())
         ax.yaxis.set_major_locator(ticker.NullLocator())
         for _side in ['top', 'bottom', 'left', 'right']:

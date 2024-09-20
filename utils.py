@@ -1,5 +1,6 @@
 import numpy as np
 from math import gcd
+from enum import Enum
 
 from shapely.geometry import Polygon, mapping
 from shapely.ops import unary_union
@@ -140,7 +141,7 @@ directions = { #encoding
     "b": [[0, 1, 0]],  # moving back
     "f": [[0, -1, 0]],  # moving front
     "ru": [[1, 0, 0], [1,0,1]],  # moving right and up
-    "rd": [[1, 0, -1], [1,0,0]],  #moving right and down
+    "rd": [[1, 0, -1], [1,0,0]],  # moving right and down
     "lu": [[-1, 0, 0], [-1,0,1]],  # moving left and up
     "ld": [[-1, 0, -1], [-1,0,0]],  # moving left and down
     "bu": [[0, 1, 0], [0,1,1]],  # moving back and up
@@ -164,6 +165,40 @@ dir_to_fill = {
     "fu": 8,  # moving front and up
     "fd": 7,  # moving front and down
 }
+
+
+class Dir2Fil:
+    s = 1  # start
+    r = 3  # moving right
+    l = 3  # moving left
+    b = 3  # moving back
+    f = 3  # moving front
+    ru = 5  # moving right and up
+    rd = 6  # moving right and down
+    lu = 6  # moving left and up
+    ld = 5  # moving left and down
+    bu = 7  # moving back and up
+    bd = 8  # moving back and down
+    fu = 8  # moving front and up
+    fd = 7  # moving front and down
+
+
+class Directions:
+    s = np.array([0, 0, 0])  # start
+    r = np.array([1, 0, 0])  # moving right
+    l = np.array([-1, 0, 0])  # moving left
+    b = np.array([0, 1, 0])  # moving back
+    f = np.array([0, -1, 0])  # moving front
+    ru = np.array([1, 0, 0])  # moving right and up
+    rd = np.array([1, 0, -1])  # moving right and down
+    lu = np.array([-1, 0, 0])  # moving left and up
+    ld = np.array([-1, 0, -1])  # moving left and down
+    bu = np.array([0, 1, 0])  # moving back and up
+    bd = np.array([0, 1, -1])  # moving back and down
+    fu = np.array([0, -1, 0])  # moving front and up
+    fd = np.array([0, -1, -1])  # moving front and down
+
+
 
 transitions = {#can go from this direction to these
     "s": ["r", "l", "b", "f", "ru", "rd", "lu", "ld", "bu", "bd", "fu", "fd"],  # start
